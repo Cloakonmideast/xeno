@@ -8,106 +8,174 @@ import DashboardCards from "@/components/DashboardCards";
 import OrdersChart from "@/components/OrdersChart";
 import TopCustomersTable from "@/components/TopCustomersTable";
 import StoreConnectForm from "@/components/StoreConnectForm";
-import SyncButton from "../../components/SyncButton"; // <-- Client component
+import SyncButton from "../../components/SyncButton";
 
 export default async function DashboardPage() {
-  // 1) Ensure user is authenticated
   const user = await requireUser();
   if (!user) redirect("/login");
 
-  // 2) Lookup store connection
   const tenantUser = await prisma.tenantUser.findFirst({
     where: { userId: user.id },
-    include: { tenant: true }
+    include: { tenant: true },
   });
 
-  // If no store connected — show setup UI
+  // --- If No Store Connected ---
   if (!tenantUser) {
     return (
       <main
         style={{
-          padding: "40px",
-          textAlign: "center",
-          fontFamily: "Arial, sans-serif"
+          background: "#0f1115",
+          minHeight: "100vh",
+          paddingTop: "90px",
+          display: "flex",
+          justifyContent: "center",
+          fontFamily: "'Inter', sans-serif",
         }}
       >
-        <h2 style={{ fontSize: "24px", marginBottom: "10px" }}>
-          No Shopify Store Connected
-        </h2>
-        <p style={{ fontSize: "16px", marginBottom: "20px" }}>
-          Connect a Shopify store to start syncing customers, orders, and products.
-        </p>
+        <div
+          style={{
+            width: "420px",
+            background: "#151820",
+            padding: "32px",
+            borderRadius: "12px",
+            border: "1px solid #2a2d33",
+            textAlign: "center",
+            boxShadow: "0px 0px 18px rgba(0,255,180,0.08)",
+          }}
+        >
+          <h2
+            style={{
+              color: "#E5E7EB",
+              fontSize: "22px",
+              fontWeight: 600,
+              marginBottom: "10px",
+            }}
+          >
+            Connect Your Shopify Store
+          </h2>
 
-        <StoreConnectForm />
+          <p
+            style={{
+              fontSize: "14px",
+              color: "#9ca3af",
+              lineHeight: "1.6",
+              marginBottom: "24px",
+            }}
+          >
+            Begin syncing orders, revenue metrics & customer performance analytics.
+          </p>
+
+          <StoreConnectForm />
+        </div>
       </main>
     );
   }
 
   const tenantId = tenantUser.tenantId;
 
-  // 3) Summary Stats
+  // --- Summary Stats ---
   const [summary] = await prisma.$queryRawUnsafe(`
-    SELECT
-      (SELECT COUNT(*) FROM "Customer" WHERE "tenantId" = '${tenantId}') AS total_customers,
-      (SELECT COUNT(*) FROM "Order" WHERE "tenantId" = '${tenantId}') AS total_orders,
-      (SELECT COALESCE(SUM("totalPrice"), 0) FROM "Order" WHERE "tenantId" = '${tenantId}') AS total_revenue
+      SELECT
+        (SELECT COUNT(*) FROM "Customer" WHERE "tenantId" = '${tenantId}') AS total_customers,
+        (SELECT COUNT(*) FROM "Order" WHERE "tenantId" = '${tenantId}') AS total_orders,
+        (SELECT COALESCE(SUM("totalPrice"), 0) FROM "Order" WHERE "tenantId" = '${tenantId}') AS total_revenue
   `);
 
-  // 4) Chart Data
+  // Ensure numeric conversion
+  const safeSummary = {
+    totalCustomers: Number(summary.total_customers),
+    totalOrders: Number(summary.total_orders),
+    totalRevenue: Number(summary.total_revenue),
+  };
+
+  // --- Chart Data ---
   const chartData = await prisma.$queryRawUnsafe(`
-    SELECT date_trunc('day', "processedAt") AS day,
-           COUNT(*) AS orders_count,
-           SUM("totalPrice") AS revenue
-    FROM "Order"
-    WHERE "tenantId" = '${tenantId}'
-    GROUP BY day ORDER BY day
+      SELECT 
+        to_char("processedAt", 'YYYY-MM-DD') AS day,
+        COUNT(*) AS orders_count,
+        SUM("totalPrice") AS revenue
+      FROM "Order"
+      WHERE 
+        "tenantId" = '${tenantId}' AND "processedAt" IS NOT NULL
+      GROUP BY day
+      ORDER BY day ASC;
   `);
 
-  // 5) Top customers (fixed JOIN field)
+  const safeChartData = chartData.map((row: any) => ({
+    day: row.day,
+    orders_count: Number(row.orders_count),
+    revenue: Number(row.revenue),
+  }));
+
+  // --- Top Customers ---
   const topCustomers = await prisma.$queryRawUnsafe(`
-    SELECT 
-      c.id,
-      c."firstName",
-      c."lastName",
-      c.email,
-      SUM(o."totalPrice") AS spent
-    FROM "Customer" c
-    LEFT JOIN "Order" o ON o."customerId" = c.id
-    WHERE c."tenantId" = '${tenantId}'
-    GROUP BY c.id, c."firstName", c."lastName", c.email
-    ORDER BY spent DESC
-    LIMIT 5
+      SELECT 
+        c.id,
+        c."firstName",
+        c."lastName",
+        c.email,
+        SUM(o."totalPrice") AS spent
+      FROM "Customer" c
+      LEFT JOIN "Order" o ON o."customerId" = c.id
+      WHERE c."tenantId" = '${tenantId}'
+      GROUP BY c.id, c."firstName", c."lastName", c.email
+      ORDER BY spent DESC
+      LIMIT 5;
   `);
+
+  const safeCustomers = topCustomers.map((c: any) => ({
+    ...c,
+    spent: Number(c.spent),
+  }));
 
   return (
     <main
       style={{
-        padding: "30px",
-        fontFamily: "Arial, sans-serif"
+        padding: "40px",
+        fontFamily: "'Inter', sans-serif",
+        background: "#0f1115",
+        minHeight: "100vh",
+        color: "#E5E7EB",
       }}
     >
-      <h1 style={{ marginBottom: "20px" }}>Dashboard</h1>
+      {/* Header */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: "36px",
+        }}
+      >
+        <h1
+          style={{
+            fontSize: "30px",
+            fontWeight: 700,
+            margin: 0,
+            color: "#ffffff",
+            letterSpacing: "-0.5px",
+          }}
+        >
+          📊 Xeno Dashboard
+        </h1>
 
-      {/* Sync button is now fully client-safe */}
-      <SyncButton 
-  tenantId={tenantId} 
-  shopDomain={tenantUser.tenant.shopDomain} 
-  privateToken={tenantUser.tenant.privateToken} 
-/>
+        <SyncButton
+          tenantId={tenantId}
+          shopDomain={tenantUser.tenant.shopDomain}
+          privateToken={tenantUser.tenant.privateToken}
+        />
+      </div>
 
+      {/* Cards */}
+      <DashboardCards {...safeSummary} />
 
-      <DashboardCards
-        totalCustomers={Number(summary.total_customers)}
-        totalOrders={Number(summary.total_orders)}
-        totalRevenue={Number(summary.total_revenue)}
-      />
-
-      <div style={{ display: "flex", gap: "20px", marginTop: "30px" }}>
+      {/* Chart + Table */}
+      <div style={{ display: "flex", gap: "28px", marginTop: "40px" }}>
         <div style={{ flex: 2 }}>
-          <OrdersChart data={chartData} />
+          <OrdersChart data={safeChartData} />
         </div>
         <div style={{ flex: 1 }}>
-          <TopCustomersTable customers={topCustomers} />
+          <TopCustomersTable customers={safeCustomers} />
         </div>
       </div>
     </main>
